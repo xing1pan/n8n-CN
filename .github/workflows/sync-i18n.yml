@@ -1,0 +1,60 @@
+name: Sync Chinese Translations
+on:
+  schedule:
+    - cron: '0 2 * * 0'   # 北京时间每周日 10:00（UTC+8）
+  workflow_dispatch:       # 手动触发
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "n8n-CN Bot"
+          git config user.email "bot@xing1pan.github.com"
+
+      - name: Merge upstream n8n
+        run: |
+          git remote add upstream https://github.com/n8n-io/n8n.git
+          git fetch upstream master --depth=50
+          git merge upstream/master --no-edit || echo "MERGE_CONFLICT=true" >> $GITHUB_ENV
+
+      - name: Handle merge conflicts
+        if: env.MERGE_CONFLICT == 'true'
+        run: |
+          echo "::warning::Merge conflict with upstream n8n. Manual resolution needed."
+          # Abort the merge so the repo stays clean
+          git merge --abort
+          exit 1
+
+      - name: Sync i18n-chinese subtree
+        run: |
+          git subtree pull --prefix=i18n-chinese \
+            https://github.com/other-blowsnow/n8n-i18n-chinese.git main --squash --no-edit 2>&1 || \
+          echo "SUBTREE_OK=true"
+
+      - name: Apply zh-CN locale
+        run: |
+          # Copy translation file
+          cp i18n-chinese/languages/zh-CN.json \
+            packages/frontend/@n8n/i18n/src/locales/zh-CN.json
+          # Apply patch (idempotent - ignore if already applied)
+          git apply i18n-chinese/patches/feat__i18n_zhCn.patch 2>&1 || \
+            echo "Patch may already be applied, skipping"
+
+      - name: Commit and push
+        run: |
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: auto-sync zh-CN translations [skip ci]"
+            git push origin master
+          fi
